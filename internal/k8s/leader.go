@@ -49,9 +49,19 @@ func newLeaderElector(client kubernetes.Interface, callbacks leaderelection.Lead
 func createLeaderHandler(lbc *LoadBalancerController) leaderelection.LeaderCallbacks {
 	return leaderelection.LeaderCallbacks{
 		OnStartedLeading: func(ctx context.Context) {
-			glog.V(3).Info("started leading, updating ingress status")
-			ingresses, mergeableIngresses := lbc.GetManagedIngresses()
-			err := lbc.UpdateManagedAndMergeableIngresses(ingresses, mergeableIngresses)
+			glog.V(3).Info("started leading")
+			if lbc.reportIngressStatus {
+				glog.V(3).Info("updating ingress status")
+
+				ingresses, mergeableIngresses := lbc.GetManagedIngresses()
+				err := lbc.UpdateManagedAndMergeableIngresses(ingresses, mergeableIngresses)
+				if err != nil {
+					glog.V(3).Infof("error updating status when starting leading: %v", err)
+				}
+			}
+
+			glog.V(3).Info("updating VirtualServer and VirtualServerRoutes status")
+			err := lbc.updateVirtualServerVirtualServerRouteStatusesFromEvents()
 			if err != nil {
 				glog.V(3).Infof("error updating status when starting leading: %v", err)
 			}

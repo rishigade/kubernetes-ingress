@@ -1400,6 +1400,73 @@ func (lbc *LoadBalancerController) emitEventForVirtualServers(eventType string, 
 	}
 }
 
+func getStatusFromEventTitle(eventTitle string) string {
+	switch eventTitle {
+	case "AddedOrUpdatedWithError", "Rejected", "NoVirtualServersFound", "Missing Secret", "UpdatedWithError":
+		return conf_v1.StateInvalid
+	case "AddedOrUpdatedWithWarning", "UpdatedWithWarning":
+		return conf_v1.StateWarning
+	case "AddedOrUpdated", "Updated":
+		return conf_v1.StateValid
+	default:
+		return "Unknown"
+	}
+}
+
+func (lbc *LoadBalancerController) updateVirtualServerVirtualServerRouteStatusesFromEvents() error {
+	vss := lbc.getVirtualServers()
+	var allErrs []error
+	for _, vs := range vss {
+		events, err := lbc.client.CoreV1().Events(vs.Namespace).List(context.TODO(),
+			meta_v1.ListOptions{FieldSelector: fmt.Sprintf("involvedObject.name=%v,involvedObject.uid=%v", vs.Name, vs.UID)})
+		if err != nil {
+			allErrs = append(allErrs, fmt.Errorf("error trying to get events for VirtualServer %v/%v: %v", vs.Namespace, vs.Name, err))
+			break
+		}
+
+		var timestamp time.Time
+		var latestEvent api_v1.Event
+		for _, event := range events.Items {
+			if event.CreationTimestamp.After(timestamp) {
+				latestEvent = event
+			}
+		}
+
+		err = lbc.statusUpdater.UpdateVirtualServerStatus(vs, getStatusFromEventTitle(latestEvent.Reason), latestEvent.Reason, latestEvent.Message)
+		if err != nil {
+			allErrs = append(allErrs, err)
+		}
+	}
+	vsrs := lbc.getVirtualServerRoutes()
+	for _, vsr := range vsrs {
+		events, err := lbc.client.CoreV1().Events(vsr.Namespace).List(context.TODO(),
+			meta_v1.ListOptions{FieldSelector: fmt.Sprintf("involvedObject.name=%v,involvedObject.uid=%v", vsr.Name, vsr.UID)})
+		if err != nil {
+			allErrs = append(allErrs, fmt.Errorf("error trying to get events for VirtualServerRoute %v/%v: %v", vsr.Namespace, vsr.Name, err))
+			break
+		}
+
+		var timestamp time.Time
+		var latestEvent api_v1.Event
+		for _, event := range events.Items {
+			if event.CreationTimestamp.After(timestamp) {
+				latestEvent = event
+			}
+		}
+
+		err = lbc.statusUpdater.UpdateVirtualServerRouteStatus(vsr, getStatusFromEventTitle(latestEvent.Reason), latestEvent.Reason, latestEvent.Message)
+		if err != nil {
+			allErrs = append(allErrs, err)
+		}
+	}
+
+	if len(allErrs) > 0 {
+		return fmt.Errorf("not all VirtualServer or VirtualServerRoutes statuses were updated: %v", allErrs)
+	}
+
+	return nil
+}
+
 func (lbc *LoadBalancerController) updateStatusForVirtualServers(state string, reason string, message string, virtualServers []*conf_v1.VirtualServer) {
 	for _, vs := range virtualServers {
 		err := lbc.statusUpdater.UpdateVirtualServerStatus(vs, state, reason, message)
